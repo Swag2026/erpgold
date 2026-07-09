@@ -3,7 +3,7 @@
  * All fetch() calls go through here. Auth token injected automatically.
  */
 
-const API_BASE = window.API_BASE || '/api';
+const API_BASE = window.API_BASE || 'https://erpgold-production.up.railway.app/api';
 
 const api = {
   _token: null,
