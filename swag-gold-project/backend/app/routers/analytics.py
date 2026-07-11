@@ -1,3 +1,12 @@
+"""
+analytics.py (router)
+
+FIXES:
+1. /analytics/summary now returns total_purchase_invoices count
+   so dashboard can show "3 purchase invoices" correctly.
+2. purchases query now also fetches count (not just sum).
+"""
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -42,19 +51,30 @@ def summary(db: Session = Depends(get_db), _=Depends(_require_analytics)):
         func.coalesce(func.sum(Invoice.card_amount), 0).label("card"),
     ).first()
 
+    # FIX: also fetch purchase count (cnt) — was only fetching sum before
     p = purchases.with_entities(
         func.coalesce(func.sum(Invoice.total_amount), 0).label("rev"),
+        func.count(Invoice.id).label("cnt"),
     ).first()
 
-    days_count = db.query(func.count(func.distinct(Invoice.invoice_date))).filter(Invoice.status == "active").scalar() or 0
+    days_count = (
+        db.query(func.count(func.distinct(Invoice.invoice_date)))
+        .filter(Invoice.status == "active")
+        .scalar() or 0
+    )
 
-    conv21 = float(s.w21 or 0) + float(s.w18 or 0) * (18/21) + float(s.w24 or 0) * (24/21)
+    conv21 = (
+        float(s.w21 or 0)
+        + float(s.w18 or 0) * (18 / 21)
+        + float(s.w24 or 0) * (24 / 21)
+    )
 
     return SummaryResponse(
         total_revenue=float(s.rev or 0),
         total_purchases=float(p.rev or 0),
         total_invoices=db.query(Invoice).filter(Invoice.status == "active").count(),
         total_sale_invoices=int(s.cnt or 0),
+        total_purchase_invoices=int(p.cnt or 0),   # FIX: new field
         total_gold_sold_grams=float(s.w21 or 0) + float(s.w18 or 0) + float(s.w24 or 0),
         equivalent_21k_grams=round(conv21, 3),
         cash_total=float(s.cash or 0),
@@ -113,13 +133,13 @@ def karat_breakdown(db: Session = Depends(get_db), _=Depends(_require_analytics)
 
     return [
         KaratBreakdownItem(purity="21K", weight_grams=float(agg.w21), amount=float(agg.a21),
-                           percentage=round(float(agg.w21)/total_weight*100, 1)),
+                           percentage=round(float(agg.w21) / total_weight * 100, 1)),
         KaratBreakdownItem(purity="18K", weight_grams=float(agg.w18), amount=float(agg.a18),
-                           percentage=round(float(agg.w18)/total_weight*100, 1)),
+                           percentage=round(float(agg.w18) / total_weight * 100, 1)),
         KaratBreakdownItem(purity="24K", weight_grams=float(agg.w24), amount=float(agg.a24),
-                           percentage=round(float(agg.w24)/total_weight*100, 1)),
+                           percentage=round(float(agg.w24) / total_weight * 100, 1)),
         KaratBreakdownItem(purity="Silver", weight_grams=float(agg.wS), amount=float(agg.aS),
-                           percentage=round(float(agg.wS)/total_weight*100, 1)),
+                           percentage=round(float(agg.wS) / total_weight * 100, 1)),
     ]
 
 
@@ -137,8 +157,10 @@ def cash_vs_card(db: Session = Depends(get_db), _=Depends(_require_analytics)):
     pa = _agg(Invoice.category.in_(PURCHASE_CATS))
 
     return CashVsCardResponse(
-        cash_sales=float(sa.cash), card_sales=float(sa.card),
-        cash_purchases=float(pa.cash), card_purchases=float(pa.card),
+        cash_sales=float(sa.cash),
+        card_sales=float(sa.card),
+        cash_purchases=float(pa.cash),
+        card_purchases=float(pa.card),
     )
 
 
