@@ -1,9 +1,13 @@
 /**
  * api.js — centralized API client for Swag Gold backend
  * All fetch() calls go through here. Auth token injected automatically.
+ *
+ * FIX: Removed hardcoded Railway URL. Now uses window.API_BASE if set,
+ *      otherwise falls back to relative '/api' so it works on any host
+ *      (Netlify, Railway, localhost) without code changes.
  */
 
-const API_BASE = window.API_BASE || 'https://erpgold-production.up.railway.app/api';
+const API_BASE = window.API_BASE || '/api';
 
 const api = {
   _token: null,
@@ -86,8 +90,6 @@ const api = {
 
   // ── Backup ──
   exportBackup: async () => {
-    // Use fetch with Authorization header so the bearer token is sent correctly,
-    // then trigger a client-side download from the blob response.
     const resp = await fetch(`${API_BASE}/backup/export`, {
       headers: api._headers(),
     });
