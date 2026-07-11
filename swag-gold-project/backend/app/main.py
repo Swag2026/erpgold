@@ -1,30 +1,66 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import os
 
 from .routers import auth, contacts, invoices, analytics, cost_rates, activity_logs, settings, reports, backup
 from .core.database import Base, engine
 
-# Create all tables (use Alembic in production)
+# Create all tables on startup (use Alembic in production migrations)
 Base.metadata.create_all(bind=engine)
+
+# ── Decide environment ─────────────────────────────────────────────────────
+IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").lower() == "production"
 
 app = FastAPI(
     title="Swag Gold — Exhibition Ledger API",
     version="1.0.0",
     description="Full-stack jewelry exhibition ERP with RBAC, analytics, and audit trails",
+    # Hide interactive docs in production
+    docs_url=None if IS_PRODUCTION else "/api/docs",
+    redoc_url=None,
 )
+
+# ════════════════════════════════════════════════════════════
+#  CORS — restrict to known origins
+#  Set ALLOWED_ORIGINS env var (comma-separated) in production.
+#  Example: https://your-app.netlify.app,https://yourdomain.com
+# ════════════════════════════════════════════════════════════
+_raw_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://localhost:8080,http://127.0.0.1:5500"
+)
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    max_age=600,
 )
 
-# Register routers
+# ════════════════════════════════════════════════════════════
+#  Security headers — added to every response
+# ════════════════════════════════════════════════════════════
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next) -> Response:
+    response: Response = await call_next(request)
+    response.headers["X-Content-Type-Options"]  = "nosniff"
+    response.headers["X-Frame-Options"]          = "DENY"
+    response.headers["X-XSS-Protection"]         = "1; mode=block"
+    response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"]        = "geolocation=(), microphone=(), camera=()"
+    # Don't advertise what server software we're running
+    response.headers.pop("server", None)
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
+
+
+# ── Routers ────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
 app.include_router(contacts.router)
 app.include_router(invoices.router)
@@ -41,7 +77,7 @@ def health():
     return {"status": "ok", "service": "Swag Gold API"}
 
 
-# Serve frontend static files if they exist alongside backend
+# ── Serve frontend static files if bundled alongside backend ───────────────
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend")
 if os.path.isdir(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=os.path.join(FRONTEND_DIR, "assets")), name="static")
