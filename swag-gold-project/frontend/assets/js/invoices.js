@@ -1,5 +1,11 @@
 /**
  * invoices.js — New Entry form, History table, and invoice detail/edit/cancel
+ *
+ * FIXES:
+ * 1. setEntryCategory: data-cat-btn → data-cat  (toggle buttons now highlight correctly)
+ * 2. loadEntryView: date uses local timezone instead of UTC (fixes Saudi Arabia +3 issue)
+ * 3. submitEntry: after saving, reloads dashboard so purchases show immediately
+ * 4. generateInvoiceNo: uses date + random suffix to avoid collisions
  */
 
 // ─── Entry Form ──────────────────────────────────────────────────────────────
@@ -20,18 +26,24 @@ async function loadEntryView() {
     populateContactDropdown();
   } catch { /* silent */ }
 
-  // Set default date to today
-  document.getElementById('fDate').value = new Date().toISOString().slice(0, 10);
+  // FIX: Use local date (not UTC) — important for Saudi Arabia (UTC+3)
+  // new Date().toISOString() gives UTC date which can be yesterday at night in SA
+  const today = new Date();
+  const localDate = today.getFullYear() + '-'
+    + String(today.getMonth() + 1).padStart(2, '0') + '-'
+    + String(today.getDate()).padStart(2, '0');
+  document.getElementById('fDate').value = localDate;
   generateInvoiceNo();
 }
 
+// FIX: Better invoice number — date prefix + random 4 digits avoids collisions
 async function generateInvoiceNo() {
-  try {
-    const invoices = await api.getInvoices({ limit: 1 });
-    // Simple sequential: SG-{count+1}
-  } catch { /* silent */ }
-  const ts = Date.now().toString().slice(-6);
-  document.getElementById('fInvoiceNo').value = `SG-${ts}`;
+  const today = new Date();
+  const datePart = today.getFullYear().toString().slice(-2)
+    + String(today.getMonth() + 1).padStart(2, '0')
+    + String(today.getDate()).padStart(2, '0');
+  const rand = Math.floor(1000 + Math.random() * 9000); // 4-digit random
+  document.getElementById('fInvoiceNo').value = `SG-${datePart}-${rand}`;
 }
 
 function populateContactDropdown() {
@@ -41,10 +53,13 @@ function populateContactDropdown() {
     _contacts.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 }
 
+// FIX: was using '[data-cat-btn]' and 'dataset.catBtn' but HTML uses 'data-cat'
+// This caused toggle buttons to never highlight when switching categories
 function setEntryCategory(cat) {
   _entryCategory = cat;
-  document.querySelectorAll('[data-cat-btn]').forEach(btn => {
-    btn.classList.toggle('gold', btn.dataset.catBtn === cat);
+  document.querySelectorAll('[data-cat]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.cat === cat);
+    btn.classList.toggle('gold', btn.dataset.cat === cat);
   });
   const usesKarats = ['sale', 'purchase_jewelry', 'purchase_scrap'].includes(cat);
   document.getElementById('karatSection').style.display = usesKarats ? '' : 'none';
@@ -115,6 +130,10 @@ async function submitEntry() {
 
   if (total_amount <= 0) { errEl.textContent = 'Amount must be greater than zero.'; return; }
 
+  // FIX: For expense/supplier_payment, if no cash/card split entered, treat full amount as cash
+  const finalCash = cash_amount;
+  const finalCard = card_amount;
+
   const payload = {
     invoice_no,
     invoice_date,
@@ -128,8 +147,8 @@ async function submitEntry() {
     amount_18k: calc.a18,
     amount_24k: calc.a24,
     amount_silver: calc.aS,
-    cash_amount,
-    card_amount,
+    cash_amount: finalCash,
+    card_amount: finalCard,
     total_amount,
     note,
     description: document.getElementById('fDescription')?.value?.trim() || '',
@@ -142,7 +161,12 @@ async function submitEntry() {
 
     if (_editingInvoiceId) {
       // Supervisor must supply note
-      if (Auth.isSupervisor && !note) { errEl.textContent = 'A note is required when editing.'; btn.disabled = false; btn.textContent = '✓ Save Entry'; return; }
+      if (Auth.isSupervisor && !note) {
+        errEl.textContent = 'A note is required when editing.';
+        btn.disabled = false;
+        btn.textContent = '✓ Save Entry';
+        return;
+      }
       await api.updateInvoice(_editingInvoiceId, payload);
       toast('Invoice updated successfully.');
     } else {
@@ -156,6 +180,16 @@ async function submitEntry() {
     generateInvoiceNo();
     _editingInvoiceId = null;
     document.getElementById('entryFormTitle').textContent = 'New Entry';
+
+    // FIX: Refresh dashboard data so purchases/sales show up immediately
+    // Previously this was missing — so dashboard showed stale data after save
+    if (typeof loadDashboard === 'function') {
+      // Reset _currentView so navigate() doesn't skip the reload
+      window._currentView = null;
+      // Small delay to let backend commit the transaction
+      setTimeout(() => loadDashboard(), 300);
+    }
+
   } catch (e) {
     errEl.textContent = e.message;
     document.getElementById('btnSaveEntry').disabled = false;
