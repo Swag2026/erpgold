@@ -65,7 +65,8 @@ async def add_security_headers(request: Request, call_next) -> Response:
         "frame-ancestors 'none'"
     )
     # Don't advertise what server software we're running
-    response.headers.pop("server", None)
+    if "server" in response.headers:
+        del response.headers["server"]
     if IS_PRODUCTION:
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
